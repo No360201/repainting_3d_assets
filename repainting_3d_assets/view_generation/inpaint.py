@@ -7,6 +7,7 @@ import torch
 from PIL import ImageOps, Image
 from pytorch3d.io import load_ply
 from pytorch3d.structures import Meshes
+from pytorch3d.renderer.mesh import TexturesUV
 
 from repainting_3d_assets.view_generation.mask_operations import (
     mask_proc_options,
@@ -16,6 +17,7 @@ from repainting_3d_assets.view_generation.pt3d_mesh_io import load_obj
 from repainting_3d_assets.view_generation.reproj import (
     render_depth_map,
     backward_oculusion_aware_render,
+    render_img,
 )
 from repainting_3d_assets.view_generation.utils import (
     import_config_key,
@@ -53,13 +55,13 @@ def initialize_meshes(inpaint_config, mesh_config, device):
     mesh_path = import_config_key(mesh_config, "obj", "")
 
     if mesh_path[-3:] == "obj":
-        verts, faces, _ = load_obj(
+        verts, faces, aux = load_obj(
             mesh_path,
-            load_textures=False,
+            load_textures=True,
             create_texture_atlas=False,
             swap_face=swap_face,
         )
-        faces = faces.verts_idx
+        # faces = faces.verts_idx
     elif mesh_path[-3:] == "ply":
         verts, faces = load_ply(mesh_path)
         if swap_face:
@@ -67,8 +69,21 @@ def initialize_meshes(inpaint_config, mesh_config, device):
     else:
         raise ValueError("Expecting obj or ply")
 
+    # verts = position_verts(verts, trans_mat, swap_face=swap_face)
+    # meshes = Meshes(verts=[verts], faces=[faces]).to(device)
+
+    # TexturesUV type
+    tex_maps = aux.texture_images
+    if tex_maps is not None and len(tex_maps) > 0:
+        verts_uvs = aux.verts_uvs.to(device)  # (V, 2)
+        faces_uvs = faces.textures_idx.to(device)  # (F, 3)
+        image = list(tex_maps.values())[0].to(device)[None]
+        tex = TexturesUV(
+            verts_uvs=[verts_uvs], faces_uvs=[faces_uvs], maps=image
+        )
+    faces = faces.verts_idx
     verts = position_verts(verts, trans_mat, swap_face=swap_face)
-    meshes = Meshes(verts=[verts], faces=[faces]).to(device)
+    meshes = Meshes(verts=[verts], faces=[faces],  textures=tex).to(device)
 
     return meshes
 
@@ -87,6 +102,9 @@ def inpaint_first_view(meshes, pipe, latents, inpaint_config, mesh_config, devic
     cur_angle = init_angle
     next_angle = cur_angle
 
+    input_image = render_img(
+        cur_angle, meshes, inpaint_config, mesh_config, device = device
+    )
     depth_path = render_depth_map(
         cur_angle, meshes, inpaint_config, mesh_config, device
     )
@@ -95,10 +113,10 @@ def inpaint_first_view(meshes, pipe, latents, inpaint_config, mesh_config, devic
     depth_tensor = d
     depth_tensor = (depth_tensor.max() - depth_tensor).float()
     depth_tensor = depth_tensor / (depth_tensor.max())
-    if input_img_path == "":
-        input_image = Image.fromarray((255 * np.ones((512, 512, 3))).astype(np.uint8))
-    else:
-        input_image = Image.open(input_img_path).convert("RGB")
+    # if input_img_path == "":
+    #     input_image = Image.fromarray((255 * np.ones((512, 512, 3))).astype(np.uint8))
+    # else:
+    #     input_image = Image.open(input_img_path).convert("RGB")
     mask = Image.fromarray((255 * np.ones((512, 512, 3))).astype(np.uint8))
 
     image = pipe(
@@ -115,6 +133,7 @@ def inpaint_first_view(meshes, pipe, latents, inpaint_config, mesh_config, devic
     ).images[0]
     i = cur_angle
     ipt_save_dir = create_dir(f"{dataset_dir}/{i}")
+    input_image.save(f"{ipt_save_dir}/input_image.png")
     image.save(f"{ipt_save_dir}/out.png")
     image = np.array(image.convert("RGBA"))
 
@@ -140,7 +159,7 @@ def inpaint_first_view(meshes, pipe, latents, inpaint_config, mesh_config, devic
         image[:, :, 3:4] == 255, image[:, :, :3], (255 * img_color).astype("uint8")
     )
 
-    input_image = Image.fromarray((255 * img_color).astype("uint8"))
+    # input_image = Image.fromarray((255 * img_color).astype("uint8"))
 
     bg_image = torch.tensor(img_color, device=device).float()
     image = pipe(
@@ -229,7 +248,8 @@ def inpaint_new_angle(
     render_uint8_img = Image.fromarray(render_uint8)
 
     img_path = f"{ipt_input_dir}/rgb.png"
-
+    # import pdb
+    # pdb.set_trace()
     d = torch.tensor(np.load(depth_path)).to(device)
 
     images[0, :, :, 3] = torch.where(
@@ -245,13 +265,33 @@ def inpaint_new_angle(
     mask_path = f"{ipt_input_dir}/mask_{mask_ops[mask_operation]}.png"
     cv2.imwrite(mask_path, mask)
 
+    input_image_coarse = render_img(
+        next_angle, meshes, inpaint_config, mesh_config, device = device
+    )
+    mask_path = f"{ipt_input_dir}/mask_coarse.png"
+    input_image_coarse.save(mask_path)
+    # cv2.imwrite(mask_path, input_image_coarse)
+
     input_image = Image.open(img_path)
+    mask_tmp = images[0][:, :, 3].cpu().numpy()[:,:,None].repeat(3,2)
+    import pdb
+    pdb.set_trace()
+    input_image = input_image * mask_tmp + (1 - mask_tmp) * cv2.cvtColor(np.asarray(input_image_coarse),cv2.COLOR_RGB2BGR)  
+    
+    mask_path = f"{ipt_input_dir}/mask_together.png"
+    input_image.save(mask_path)
+    cv2.imwrite(mask_path, input_image)
+
     mask = Image.open(mask_path)
     mask = mask.convert("L")
 
     mask = ImageOps.invert(mask)
 
     input_image.save(f"{ipt_save_dir}/preproc.png")
+
+    import pdb
+    pdb.set_trace()
+
     d = np.load(depth_path)
     d = torch.tensor(d).float().to(device)
     depth_tensor = d

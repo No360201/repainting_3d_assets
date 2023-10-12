@@ -9,6 +9,9 @@ from pytorch3d.renderer import (
     look_at_view_transform,
     FoVPerspectiveCameras,
     MeshRasterizer,
+    SoftPhongShader,
+    MeshRenderer,
+    RasterizationSettings,
 )
 
 from repainting_3d_assets.view_generation.raster_settings import (
@@ -353,3 +356,35 @@ def render_silhouette(
     sil = Image.fromarray((255 * sil.cpu().numpy()).astype(np.uint8))
     sil_path = f"{sil_dir}/{angle:04d}.png"
     sil.save(sil_path)
+
+def render_img(
+    angle, meshes, inpaint_config, mesh_config, size=512, device="cpu"
+):
+    Z_near, Z_far = inpaint_config["znear"], inpaint_config["zfar"]
+    fov = inpaint_config["fov"]
+    save_dir = create_dir(mesh_config["save_dir"])
+    create_dir(f"{save_dir}/dataset")
+    sil_dir = create_dir(f"{save_dir}/sil")
+    elev_angles = torch.tensor([0]).to(device)
+    azim_angles = torch.tensor([angle]).to(device)
+    R, T = look_at_view_transform(
+        (Z_near + Z_far) / 2, elev_angles.flatten(), (azim_angles).flatten()
+    )
+    cameras = FoVPerspectiveCameras(device=device, R=R, T=T, fov=fov)
+    rasterizer_mesh = MeshRasterizer(
+        raster_settings=raster_settings_mesh, cameras=cameras
+    )
+    rasterizer_mesh.raster_settings.image_size = size
+    shader = SoftPhongShader(device = device, cameras = cameras)
+    renderer = MeshRenderer(rasterizer_mesh, shader)
+    images = renderer(meshes, cameras=cameras)
+    # fragments = rasterizer_mesh(meshes)
+    # import pdb
+    # pdb.set_trace()
+    # Image.fromarray((255 * images[0].cpu().numpy()).astype(np.uint8)).save('./img.png')
+    # sil = fragments.zbuf[0, :, :, 0] != -1
+
+    # sil = Image.fromarray((255 * sil.cpu().numpy()).astype(np.uint8))
+    # sil_path = f"{sil_dir}/{angle:04d}.png"
+    # sil.save(sil_path)
+    return Image.fromarray((255 * images[0,:,:,0:3].cpu().numpy()).astype(np.uint8))

@@ -20,9 +20,9 @@ dependencies:
   - pytorch3d=0.7.4
   - cgal-cpp=5.6
   - pip:
-      - accelerate==0.15.0
+      - accelerate
       - commentjson==0.9.0
-      - diffusers @ git+https://github.com/huggingface/diffusers@df2b548e893ccb8a888467c2508756680df22821
+      - diffusers
       - dvc==3.15.3
       - opencv-python==4.5.5.62
       - pandas==2.0.3
@@ -30,5 +30,5 @@ dependencies:
       - pybind11==2.7.1
       - scikit-image==0.19.2
       - tqdm==4.63.1
-      - transformers @ git+https://github.com/huggingface/transformers@8637316e5e94ba0a2493e5df7846f2f23f46eaef
+      - transformers
       - trimesh==3.17.1
